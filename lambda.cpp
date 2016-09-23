@@ -72,13 +72,15 @@ const struct evaluated evaluate(const Term* const ast, std::map<std::string, con
     } else if (right) {
       auto r = evaluate(a->left, env);
       return evaluate(new(GC) Application(r.lambda, right), r.env);
+    } else if (const Identifier* i = dynamic_cast<const Identifier*>(a->left)) {
+      return evaluate(new(GC) Application(env.at(i->name), a->right), env);
     }
   }
   else if (const Identifier* i = dynamic_cast<const Identifier*>(ast)) {
     return {env.at(i->name), env};
   }
   else if (const Lambda* l = dynamic_cast<const Lambda*>(ast)) { return {l, env}; }
-  throw std::invalid_argument( "invalid ast" );
+  throw std::invalid_argument( "invalid ast " + ast->pretty_print() );
 }
 
 Identifier* i(const std::string name) { return new(GC) Identifier(name); }
@@ -141,24 +143,24 @@ const struct typechecked typecheck(const Term* const ast, int nextType, std::map
     return { map.at(i->name), nextType };
   }
   else if (const Lambda* l = dynamic_cast<const Lambda*>(ast)) {
-    const TypeHolder* const newHolder = new (GC) TypeHolder(nextType);
+    const TypeHolder* const newHolder = new(GC) TypeHolder(nextType);
     map[l->head->name] = newHolder;
     const struct typechecked tc = typecheck(l->body, nextType+1, map);
-    return { new (GC) LambdaType(newHolder, tc.type), tc.nextType};
+    return { new(GC) LambdaType(newHolder, tc.type), tc.nextType };
   }
-  throw std::invalid_argument( "invalid type ast" );
+  throw std::invalid_argument( "invalid type ast" + ast->pretty_print() );
 }
 
-const Type* t(Term *ast) { return typecheck(ast, 1, std::map<std::string, const Type*>()).type; }
+const Type* t(const Term* const ast) { return typecheck(ast, 1, std::map<std::string, const Type*>()).type; }
 
 int main() {
   Lambda* Identity = l(i("x"), i("x"));
   std::cout << "Identity = " << Identity << std::endl;
-  Term* test1 = a(Identity, Identity);
+  const Term* const test1 = a(Identity, Identity);
   std::cout << "I(I) = " << test1 << std::endl;
   std::cout << "I(I) => " << e(test1) << std::endl;
-  Term* True = l(i("a"), l(i("b"), i("a")));
-  Term* False = l(i("a"), l(i("b"), i("b")));
+  const Term* const True = l(i("a"), l(i("b"), i("a")));
+  const Term* const False = l(i("a"), l(i("b"), i("b")));
   std::cout << "True = " << True << std::endl;
   std::cout << "False = " << False << std::endl;
   std::cout << "(a=>b=>c=>a)(I)(T)(F) = " << e(a(a(a(l(i("a"), l(i("b"), l(i("c"), i("a")))), Identity), True), False)) << std::endl;
@@ -167,5 +169,12 @@ int main() {
   std::cout << "False = " << False << " :: " << t(False) << std::endl;
   std::cout << "(True Identity) = " << a(True, Identity) << " :: " << t(a(True, Identity)) << std::endl;
   std::cout << "(Identity False) = " << a(Identity, False) << " :: " << t(a(Identity, False)) << std::endl;
+  const Term* const AAA = l(i("a"), a(i("a"), i("a")));
+  std::cout << "AAA = " << AAA << std::endl;
+  std::cout << "(AAA True) = " << e(a(AAA,True)) << std::endl;
+  // std::cout << "(AAA AAA) = " << e(a(AAA,AAA)) << std::endl; // todo
+  //const Term* const Not = l(i("p"), a(a(i("p"), False), True));
+  //std::cout << "Not = " << Not << " :: " << t(Not) << std::endl;
+  //std::cout << "Not(True) = " << e(a(Not, True)) << " :: " << e(a(Not, True)) << std::endl;
   return 0;
 }
