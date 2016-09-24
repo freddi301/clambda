@@ -116,42 +116,74 @@ class LambdaType: public Type {
     }
 };
 
-struct typechecked { const Type* const type; const int nextType; };
-std::ostream& operator<<(std::ostream &stream, std::map<std::string, const Type*> &map) {
+struct typechecked { const Type* const type; const int nextType; std::map<const Type*, const Type*> alias; };
+std::ostream& operator<<(std::ostream &stream, const std::map<std::string, const Type*> &map) {
   stream << "{";
-  for (auto t : map) { stream << " " << t.first << " := " << t.second << " "; };
+  for (auto t : map) { stream << " " << t.first << " := " << t.second->pretty_print() << " "; };
   stream << "}";
   return stream;
 }
+std::ostream& operator<<(std::ostream &stream, const std::map<const Type*, const Type*> &map) {
+  stream << "{";
+  for (auto t : map) { stream << " " << t.first->pretty_print() << " =:= " << t.second->pretty_print() << " "; };
+  stream << "}";
+  return stream;
+}
+std::ostream& operator<<(std::ostream &stream, const struct typechecked &t) {
+  stream << t.type; if (t.alias.size()) { stream << " " << t.alias; }; return stream;
+}
 
-const struct typechecked typecheck(const Term* const ast, int nextType, std::map<std::string, const Type*> map) {
+const Type* const recunalias(const Type* type, std::map<const Type*, const Type*> alias) {
+  try {
+    const Type* const unaliased = alias.at(type);
+    if (const LambdaType* l = dynamic_cast<const LambdaType*>(unaliased)) {
+      return new(GC) LambdaType(recunalias(l->head, alias), recunalias(l->body, alias));
+    } return unaliased;
+  } catch (std::out_of_range e) { return type; };
+}
+const Type* operator>>(std::map<const Type*, const Type*> alias, const Type* const type) {
+  return recunalias(type, alias);
+}
+
+const struct typechecked
+typecheck(
+  const Term* const ast,
+  const int nextType,
+  std::map<std::string, const Type*> map,
+  std::map<const Type*, const Type*> alias
+) {
   if (const Application* a = dynamic_cast<const Application*>(ast)) {
     const Lambda* const left = dynamic_cast<const Lambda*>(a->left);
     const Lambda* const right = dynamic_cast<const Lambda*>(a->right);
     if (left && right) {
-      const struct typechecked tc = typecheck(right, nextType, map);
+      const struct typechecked tc = typecheck(right, nextType, map, alias); alias = tc.alias;
       map[left->head->name] = tc.type;
-      return typecheck(left->body, tc.nextType, map);
-    } else if (left) {
-      //return evaluate(new(GC) Application(left, evaluate(a->right, env).lambda), env);
-    } else if (right) {
-      //auto r = evaluate(a->left, env);
-      //return evaluate(new(GC) Application(r.lambda, right), r.env);
+      return typecheck(left->body, tc.nextType, map, alias);
+    } else {
+      const struct typechecked tcr = typecheck(a->right, nextType, map, alias); alias = tcr.alias;
+      const TypeHolder* const rt = new(GC) TypeHolder(tcr.nextType);
+      const struct typechecked tcl = typecheck(a->left, tcr.nextType+1, map, alias); alias = tcl.alias;
+      if (const TypeHolder* th = dynamic_cast<const TypeHolder*>(tcl.type)) {
+        alias[th] = new(GC) LambdaType(tcr.type, rt);
+      }
+      return { rt, tcl.nextType, alias };
     }
   }
   else if (const Identifier* i = dynamic_cast<const Identifier*>(ast)) {
-    return { map.at(i->name), nextType };
+    return { map.at(i->name), nextType, alias };
   }
   else if (const Lambda* l = dynamic_cast<const Lambda*>(ast)) {
     const TypeHolder* const newHolder = new(GC) TypeHolder(nextType);
     map[l->head->name] = newHolder;
-    const struct typechecked tc = typecheck(l->body, nextType+1, map);
-    return { new(GC) LambdaType(newHolder, tc.type), tc.nextType };
+    const struct typechecked tc = typecheck(l->body, nextType+1, map, alias); alias = tc.alias;
+    return { new(GC) LambdaType(alias>>newHolder, tc.type), tc.nextType, alias };
   }
   throw std::invalid_argument( "invalid type ast" + ast->pretty_print() );
 }
 
-const Type* t(const Term* const ast) { return typecheck(ast, 1, std::map<std::string, const Type*>()).type; }
+const struct typechecked t(const Term* const ast) {
+  return typecheck(ast, 1, std::map<std::string, const Type*>(), std::map<const Type*, const Type*>());
+}
 
 int main() {
   Lambda* Identity = l(i("x"), i("x"));
@@ -170,11 +202,15 @@ int main() {
   std::cout << "(True Identity) = " << a(True, Identity) << " :: " << t(a(True, Identity)) << std::endl;
   std::cout << "(Identity False) = " << a(Identity, False) << " :: " << t(a(Identity, False)) << std::endl;
   const Term* const AAA = l(i("a"), a(i("a"), i("a")));
-  std::cout << "AAA = " << AAA << std::endl;
+  std::cout << "AAA = " << AAA << /*" :: " << t(AAA) <<*/ std::endl; // todo infinite loop
   std::cout << "(AAA True) = " << e(a(AAA,True)) << std::endl;
-  // std::cout << "(AAA AAA) = " << e(a(AAA,AAA)) << std::endl; // todo
-  //const Term* const Not = l(i("p"), a(a(i("p"), False), True));
-  //std::cout << "Not = " << Not << " :: " << t(Not) << std::endl;
-  //std::cout << "Not(True) = " << e(a(Not, True)) << " :: " << e(a(Not, True)) << std::endl;
+  // std::cout << "(AAA AAA) = " << e(a(AAA,AAA)) << std::endl; // todo infinete type
+  const Term* const Not = l(i("p"), a(a(i("p"), False), True));
+  std::cout << "Not = " << Not << " :: " << t(Not) << std::endl;
+  std::cout << "Not(True) = " << e(a(Not, True)) << " :: " << t(e(a(Not, True)).lambda) << std::endl; // todo implicitly evaluate
+  const Term* const aI = l(i("a"), a(i("a"), l(i("x"),i("x"))));
+  std::cout << aI << " :: " << t(aI) <<std::endl;
+  const Term* const ABAB = l(i("a"), l(i("b"), a(i("a"), i("b"))));
+  std::cout << ABAB << " :: " << t(ABAB) << std::endl;
   return 0;
 }
